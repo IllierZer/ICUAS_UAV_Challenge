@@ -1,0 +1,84 @@
+name: icuas_ch
+root: ./
+startup_window: roscore
+pre_window: |
+  export UAV_NAMESPACE=red;
+  export ARENA_TYPE=<%= @settings["arena"]%>;
+  if [[ -z "${ARENA_TYPE}" ]]
+  then 
+    export ARENA_TYPE=1
+  fi;
+  if [ $ARENA_TYPE -ge 6] || [ $ARENA_TYPE -le 0 ]
+  then
+    echo "arena argument should be 1, 2 or 3. Defaulting to 1."
+    export ARENA_TYPE=1
+  fi;
+  if [ $ARENA_TYPE -eq 1 ]
+  then
+    export TILE_X=12.5
+    export TILE_Y=-3.0
+    export TILE_Z=2.0
+    export TILE_YAW=3.1415926
+  elif [ $ARENA_TYPE -eq 2 ]
+  then
+    export TILE_X=9.0
+    export TILE_Y=-7.5
+    export TILE_Z=2.5
+    export TILE_YAW=1.57079632679
+  elif [ $ARENA_TYPE -ge 3 ]
+  then
+    export TILE_X=7.5
+    export TILE_Y=7.5
+    export TILE_Z=3.5
+    export TILE_YAW=-1.57079632679
+  fi;
+windows:
+  - roscore:
+      layout:
+      panes:
+        - roscore
+        - export SITL_RITW_TERMINAL="tmux new-window -d -n:ardupilot1"; waitForRos; 
+          roslaunch ardupilot_gazebo sim_vehicle.launch 
+          enable_console:=false
+          additional_arguments:="--no-rebuild"
+          parm_file:=$(rospack find icuas22_competition)/parameters/arducopter_nogps.params
+        - waitForRos; rosparam set use_sim_time true; roslaunch ardupilot_gazebo mavros.launch
+        - waitForRos; rosrun icuas22_competition spawn_ball_at_uav.py __ns:=$UAV_NAMESPACE
+  - gazebo:
+      layout: tiled
+      panes:
+        - waitForRos; roslaunch ardupilot_gazebo kopterworx.launch
+          use_sim_time:=true
+          enable_magnet:=true
+          x:=-10
+          world:=$(rospack find icuas22_competition)/worlds/well_lit.world
+        - waitForRos; waitForSimulation; roslaunch larics_gazebo_worlds spawn_arena_v$ARENA_TYPE.launch
+        - waitForRos; waitForSimulation; sleep 2; roslaunch larics_gazebo_worlds spawn_alvar_tile.launch 
+          x:=$TILE_X yaw:=$TILE_YAW z:=$TILE_Z y:=$TILE_Y
+  - arm&takeof:
+      layout: tiled
+      panes:
+        - waitForRos; roslaunch uav_ros_control pid_carrot.launch 
+          manual_takeoff:=false
+          msf_callback_enable:=true
+          odometry:=odometry
+          control_type:=pid_cascade_node_yawrate
+          default_params:=custom_config/position_control_thrust.yaml
+        - |
+          waitForRos
+          waitForSysStatus
+          rosrun ardupilot_gazebo automatic_takeoff.sh 2 /$UAV_NAMESPACE/odometry
+          sleep 20
+          rosservice call /$UAV_NAMESPACE/spawn_ball
+          rostopic pub --latch /$UAV_NAMESPACE/challenge_started std_msgs/Bool True
+  - trajectory:
+      layout: tiled
+      panes:
+        - waitForRos; roslaunch uav_ros_tracker topp_tracker.launch 
+          tracker_config:=custom_config/topp_config_custom.yaml
+  - solution:
+      layout: tiled
+      panes:
+        # Launch your Challenge solution here
+        - waitForRos; waitForSimulation; cd ~/uav_ws/src/icuas22_competition/scripts/; apt install -y ros-melodic-ros-numpy; python broadcaster.py
+        - waitForRos; waitForSimulation; sleep 15; cd ~/uav_ws/src/icuas22_competition/scripts/; python main.py
